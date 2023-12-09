@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/sessions"
+	"github.com/rs/cors"
 )
 
 var (
@@ -13,7 +14,13 @@ var (
 )
 
 func secret(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, "cookie-name")
+	session, err := store.Get(r, "cookie-name")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// セッションの値を確認
+	fmt.Println("Session Values:", session.Values)
 
 	// 認証チェック
 	if auth, ok := session.Values["authenticated"].(bool); !ok || !auth {
@@ -25,11 +32,27 @@ func secret(w http.ResponseWriter, r *http.Request) {
 }
 
 func login(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, "cookie-name")
+	session, err := store.Get(r, "cookie-name")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// 認証成功と見なす
 	session.Values["authenticated"] = true
-	session.Save(r, w)
+	session.Values["foo"] = "bar"
+	session.Values[42] = 43
+
+	err = session.Save(r, w)
+	if err != nil {
+		fmt.Println("Error saving session:", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// セッションの値を確認
+	fmt.Println("Session Values:", session.Values)
+
+	fmt.Println("Login successful")
 }
 
 func logout(w http.ResponseWriter, r *http.Request) {
@@ -37,13 +60,25 @@ func logout(w http.ResponseWriter, r *http.Request) {
 
 	// ログアウト
 	session.Values["authenticated"] = false
+
 	session.Save(r, w)
+
+	fmt.Println("Session Values:", session.Values)
+	fmt.Println("Logout successful")
 }
 
 func main() {
-	http.HandleFunc("/secret", secret)
-	http.HandleFunc("/login", login)
-	http.HandleFunc("/logout", logout)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/secret", secret)
+	mux.HandleFunc("/login", login)
+	mux.HandleFunc("/logout", logout)
 
-	http.ListenAndServe(":8080", nil)
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3000"}, // ReactアプリのURLを設定します
+		AllowCredentials: true,                              //これでCookieが使えるようになります
+	})
+
+	handler := c.Handler(mux)
+
+	http.ListenAndServe(":8080", handler)
 }
