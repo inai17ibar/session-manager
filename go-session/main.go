@@ -2,23 +2,28 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/sessions"
 	"github.com/rs/cors"
 )
 
 var (
-	key   = []byte("super-secret-key")
+	// セキュリティキーは環境変数から読み込む
+	key   = []byte(os.Getenv("SESSION_KEY"))
 	store = sessions.NewCookieStore(key)
 )
 
 func secret(w http.ResponseWriter, r *http.Request) {
 	session, err := store.Get(r, "cookie-name")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Printf("Error retrieving session: %v", err)
 		return
 	}
+
 	// セッションの値を確認
 	fmt.Println("Session Values:", session.Values)
 
@@ -34,7 +39,8 @@ func secret(w http.ResponseWriter, r *http.Request) {
 func login(w http.ResponseWriter, r *http.Request) {
 	session, err := store.Get(r, "cookie-name")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Printf("Error retrieving session: %v", err)
 		return
 	}
 
@@ -45,10 +51,11 @@ func login(w http.ResponseWriter, r *http.Request) {
 
 	err = session.Save(r, w)
 	if err != nil {
-		fmt.Println("Error saving session:", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Printf("Error saving session: %v", err)
 		return
 	}
+
 	// セッションの値を確認
 	fmt.Println("Session Values:", session.Values)
 
@@ -56,29 +63,43 @@ func login(w http.ResponseWriter, r *http.Request) {
 }
 
 func logout(w http.ResponseWriter, r *http.Request) {
-	session, _ := store.Get(r, "cookie-name")
+	session, err := store.Get(r, "cookie-name")
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Printf("Error retrieving session: %v", err)
+		return
+	}
 
 	// ログアウト
 	session.Values["authenticated"] = false
-
-	session.Save(r, w)
+	err = session.Save(r, w)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		log.Printf("Error saving session: %v", err)
+		return
+	}
 
 	fmt.Println("Session Values:", session.Values)
 	fmt.Println("Logout successful")
 }
 
 func main() {
+	// 環境変数 SESSION_KEY が設定されていない場合は、アプリケーションを終了
+	if os.Getenv("SESSION_KEY") == "" {
+		log.Fatal("SESSION_KEY environment variable is not set")
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/secret", secret)
 	mux.HandleFunc("/login", login)
 	mux.HandleFunc("/logout", logout)
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000"}, // ReactアプリのURLを設定します
-		AllowCredentials: true,                              //これでCookieが使えるようになります
+		AllowedOrigins:   []string{"http://localhost:3000"}, // ReactアプリのURLを設定
+		AllowCredentials: true,                              // Cookieが使えるように設定
 	})
 
 	handler := c.Handler(mux)
 
-	http.ListenAndServe(":8080", handler)
+	log.Fatal(http.ListenAndServe(":8080", handler))
 }
