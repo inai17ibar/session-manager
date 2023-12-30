@@ -34,16 +34,33 @@ func secret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// クライアントからのリクエストで送信されたクッキーを取得
+	cookie, err := r.Cookie("session-id")
+	if err != nil {
+		if err == http.ErrNoCookie {
+			// クッキーが存在しない場合の処理
+			http.Error(w, "No cookie found", http.StatusBadRequest)
+			return
+		}
+		// その他のエラー
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// クッキーの値を取得
+	session.ID = cookie.Value
+
+	// セッションの値を確認
+	fmt.Println("Session ID from cookie:", session.ID) //
+
 	// Redisからセッションデータを読み込む
 	err = loadSessionFromRedis(session)
 	if err != nil {
 		// エラー処理
-		log.Printf("Error retrieving session: %v", err)
+		log.Printf("Error loading session: %v", err)
 		return
 	}
 
-	// セッションの値を確認
-	fmt.Println("Session ID:", session.ID)
 	fmt.Println("Session Values:", session.Values)
 
 	// 認証チェック
@@ -52,7 +69,10 @@ func secret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Fprintln(w, "The cake is a lie!")
+	//fmt.Fprintln(w, "The cake is a lie!")
+
+	// レスポンス
+	w.Write([]byte("Secret"))
 }
 
 func login(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +84,6 @@ func login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if session.ID == "" {
-		// Generate a random session ID key suitable for storage in the DB
-		session.ID = string(securecookie.GenerateRandomKey(32))
 		session.ID = strings.TrimRight(
 			base32.StdEncoding.EncodeToString(
 				securecookie.GenerateRandomKey(32)), "=")
@@ -83,13 +101,13 @@ func login(w http.ResponseWriter, r *http.Request) {
 	// 認証成功と見なす
 	session.Values["authenticated"] = true
 	//test
-	session.Values["foo"] = "bar"
+	//session.Values["foo"] = "bar"
 
 	// Redisにセッションデータを保存
 	err = saveSessionToRedis(session)
 	if err != nil {
 		// エラー処理
-		log.Printf("Error retrieving session: %v", err)
+		log.Printf("Error saving session: %v", err)
 		return
 	}
 
@@ -100,11 +118,27 @@ func login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// セッションIDをクッキーに設定
+	cookie := http.Cookie{
+		Name:     "session-id",
+		Value:    session.ID,
+		Path:     "/",
+		MaxAge:   86400 * 7,
+		HttpOnly: true, // JavaScriptからアクセスを防ぐ
+		// Secure: true, // HTTPSを使用する場合にコメントアウトを外す
+	}
+
+	// クッキーをレスポンスに追加
+	http.SetCookie(w, &cookie)
+
 	// セッションの値を確認
 	fmt.Println("Session ID:", session.ID)
 	fmt.Println("Session Values:", session.Values)
 
 	fmt.Println("Login successful")
+
+	// レスポンス
+	w.Write([]byte("Logged in"))
 }
 
 func logout(w http.ResponseWriter, r *http.Request) {
@@ -123,10 +157,32 @@ func logout(w http.ResponseWriter, r *http.Request) {
 		// Secure: true,
 	}
 
-	// ログアウト
-	//session.Values["authenticated"] = false
+	// クライアントからのリクエストで送信されたクッキーを取得
+	cookie, err := r.Cookie("session-id")
+	if err != nil {
+		if err == http.ErrNoCookie {
+			// クッキーが存在しない場合の処理
+			http.Error(w, "No cookie found", http.StatusBadRequest)
+			return
+		}
+		// その他のエラー
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// クッキーの値を取得
+	session.ID = cookie.Value
+
+	// ログアウト処理
 	// セッションデータを削除
 	delete(session.Values, "authenticated")
+
+	// Redisからセッションを削除
+	err = redisClient.Del(context.Background(), session.ID).Err()
+	if err != nil {
+		log.Printf("Error deleting session from Redis: %v", err)
+		// ここでエラーを返すかどうかはアプリケーションの要件によります
+	}
 
 	err = session.Save(r, w)
 	if err != nil {
@@ -135,8 +191,12 @@ func logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fmt.Println("Session ID:", session.ID) // ここでは空文字列になる
 	fmt.Println("Session Values:", session.Values)
 	fmt.Println("Logout successful")
+
+	// レスポンス
+	w.Write([]byte("Logged out"))
 }
 
 func CreateToken(userID int) (string, error) {
@@ -209,7 +269,7 @@ func loadSessionFromRedis(session *sessions.Session) error {
 		return err
 	}
 
-	log.Printf("Session is saved to Redis: %s\n", session.ID)
+	log.Printf("Session is loaded to Redis: %s\n", session.ID)
 
 	// 一時的にmap[string]interface{}型を使用
 	tempValues := make(map[string]interface{})
